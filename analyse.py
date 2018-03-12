@@ -13,7 +13,7 @@ import binascii
 import base64
 import requests
 
-def idxOfFileName(s):
+def idxOfPngName(s):
     i = s.rfind('-')
     if -1==i:
         return -1
@@ -42,7 +42,7 @@ class QCouldApi:
         hexstring = hmac.new(self._secretkey.encode('utf-8'), text.encode('utf-8'), hashlib.sha1).hexdigest()
         binstring = binascii.unhexlify(hexstring)
         return base64.b64encode(binstring+text.encode('utf-8')).rstrip()
-    def ocrGeneral(self, img_file_path):
+    def ocrGeneral(self, img_file_path, output_to_file=None):
         if time.time()-self._sign_time > 300:
             self._sign = self.getSign(self._bucket, 600)
             self._sign_time = time.time()
@@ -55,14 +55,17 @@ class QCouldApi:
         data['bucket'] = self._bucket
         data['image'] = ('1.png',img_data)
         headers = {}
-        headers['Host'] = 'service.image.myqcloud.com'
+        #headers['Host'] = 'service.image.myqcloud.com'
         headers['Authorization'] = self._sign
         headers['User-Agent'] = 'User('+self._appid+')'
-        req = requests.post('http://service.image.myqcloud.com/ocr/general', files=data, headers=headers, timeout=30)
+        req = requests.post('http://recognition.image.myqcloud.com/ocr/general', files=data, headers=headers, timeout=30)
         if req.status_code==200:
-            logging.info(req.text)
+            if output_to_file is not None:
+                output_to_file.write(req.text)
+            return True
         else:
-            logging.info(str(req.status_code)+' '+req.text)
+            logging.info('    '+str(req.status_code)+' '+req.text)
+            return False
 class Analyse:
     def __init__(self):
         config = configparser.ConfigParser()
@@ -82,37 +85,55 @@ class Analyse:
                     n = int(pdf_dir.name)
                     cfg = configparser.ConfigParser()
                     cfg.read(str(pdf_dir)+'/'+str(n)+'.ini')
-                    if time.time()-time.mktime(time.strptime(cfg['crawl']['last_modified'], '%a, %d %b %Y %H:%M:%S %z')) < seconds:
+                    if time.time()-int(cfg['memo']['last_modified_time']) < seconds:
                         ret.append(pdf_dir)
         ret.sort()
         return ret
     def gmtDateNeedCheck(self, date, seconds):
         dt = datetime.datetime(year=int(date/10000), month=int((date%10000)/100), day=date%100, hour=23, minute=59, second=59)
-        return time.time()-dt.timestamp() < seconds
+        return time.time()-dt.timestamp() < seconds+86400*5
     def makePng(self, pdf_dir):
-        logging.info("\tgenerating png")
         n = int(pdf_dir.name)
         pdf_path = str(pdf_dir)+'/'+str(n)+'.pdf'
         png_path = str(pdf_dir)+'/'+str(n)+'.png'
         os.system('rm '+str(pdf_dir)+'/*.png -rf')
         os.system('convert -density 100 -resize 200% -quality 100 -sharpen 0x1.0 '+pdf_path+' '+png_path)
-    def anaPng(self, pdf_dir):
-        logging.info("\tanalysing png")
+    def anaPngQcloud(self, pdf_dir):
         png_list = []
         for child_path in pathlib.Path(pdf_dir).iterdir():
             if child_path.name.find('.png')>=0:
                 png_list.append(child_path.name)
-        png_list.sort(key=idxOfFileName)
+        png_list.sort(key=idxOfPngName)
         for png in png_list:
-            logging.info("\t\t"+png)
-            self.qcapi.ocrGeneral(str(pdf_dir)+'/'+png)
-
+            logging.info("    {}".format(png))
+            with open(str(pdf_dir)+'/'+png+'.qcloud.ocr.json','w+t') as f:
+                if not self.qcapi.ocrGeneral(str(pdf_dir)+'/'+png, f):
+                    return False
+        return True
+    def pdf2txt(self, pdf_dir):
+        parent = str(pdf_dir)
+        name = pathlib.Path(pdf_dir).name
+        cmd = './pdf2txt.py -t xml {dir}/{number}.pdf > {dir}/{number}.pdf2txt.xml'.format(dir=parent, number=name)
+        os.system(cmd)
+        cmd = './pdf2txt.py -t html {dir}/{number}.pdf > {dir}/{number}.pdf2txt.html'.format(dir=parent, number=name)
+        os.system(cmd)
 def main():
     a = Analyse()
-    for pdf_dir in a.getRecentModifiedPdfDir(86400*10):
-        logging.info('working in {}'.format(pdf_dir))
+    dir_list = a.getRecentModifiedPdfDir(86400*10)
+    logging.info('analysing with pdf2txt')
+    for pdf_dir in dir_list:
+        name = pathlib.Path(pdf_dir).name
+        logging.info('  {}'.format(name))
+        a.pdf2txt(pdf_dir)
+        time.sleep(1)
+    logging.info('analysing with png')
+    for pdf_dir in dir_list:
+        name = pathlib.Path(pdf_dir).name
+        logging.info('  {}, generating png'.format(name))
         a.makePng(pdf_dir)
-        a.anaPng(pdf_dir)
+        logging.info('    analysing with qcloud ocr')
+        if not a.anaPngQcloud(pdf_dir):
+            break
         time.sleep(1)
 
 logging.basicConfig(level=logging.INFO, format='%(message)s @ %(filename)s:%(lineno)s')
