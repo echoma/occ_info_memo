@@ -113,10 +113,16 @@ class Analyse:
     def pdf2txt(self, pdf_dir):
         parent = str(pdf_dir)
         name = pathlib.Path(pdf_dir).name
-        cmd = './pdf2txt.py -t xml {dir}/{number}.pdf > {dir}/{number}.pdf2txt.xml'.format(dir=parent, number=name)
-        os.system(cmd)
-        cmd = './pdf2txt.py -t html {dir}/{number}.pdf > {dir}/{number}.pdf2txt.html'.format(dir=parent, number=name)
-        os.system(cmd)
+        format_list = [
+            ['text','txt'], 
+            ['xml','xml'], 
+            ['html','html'], 
+            #['tag','tag.txt']
+        ]
+        for format,suffix in format_list:
+            cmd = './pdf2txt.py -t {format} {dir}/{number}.pdf > {dir}/{number}.pdf2txt.{suffix}'.format(dir=parent, number=name, format=format, suffix=suffix)
+            logging.info(cmd)
+            os.system(cmd)
 def main():
     a = Analyse()
     dir_list = a.getRecentModifiedPdfDir(86400*10)
@@ -135,6 +141,5 @@ def main():
         if not a.anaPngQcloud(pdf_dir):
             break
         time.sleep(1)
-
 logging.basicConfig(level=logging.INFO, format='%(message)s @ %(filename)s:%(lineno)s')
 main()
